@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Hot Wheels Inventory</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1115; --card:#1a1d24; --card2:#20242c; --text:#eef0f4; --muted:#9aa3b2;
+    --accent:#ff3b3b; --sth:#d9b54a; --sth-text:#3a2c00; --th:#c7cbd1; --th-text:#20242c;
+    --mainline:#3a4150; --border:#2a2f3a; --good:#3ecf8e; --bad:#ff5d5d;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);padding-bottom:70px;}
+  header{position:sticky;top:0;background:var(--bg);padding:14px 16px 10px;border-bottom:1px solid var(--border);z-index:10;}
+  header h1{font-size:18px;margin:0 0 2px;}
+  header .sub{font-size:12px;color:var(--muted);}
+  .tabs{display:flex;gap:8px;margin-top:10px;}
+  .tab-btn{flex:1;padding:9px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px;font-weight:600;}
+  .tab-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+  main{padding:14px 16px 20px;max-width:640px;margin:0 auto;}
+  .screen{display:none;}
+  .screen.active{display:block;}
+
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;}
+  input[type=text], input[type=search], select, textarea{
+    width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border);
+    background:var(--card2);color:var(--text);font-size:15px;
+  }
+  textarea{resize:vertical;min-height:60px;}
+  .row2{display:flex;gap:10px;}
+  .row2>*{flex:1;}
+
+  .capture-box{border:1px dashed var(--border);border-radius:12px;padding:12px;text-align:center;background:var(--card);}
+  .capture-box img{max-width:100%;border-radius:8px;display:block;margin:8px auto 0;max-height:220px;object-fit:cover;}
+  .btn{display:inline-block;padding:10px 16px;border-radius:10px;border:none;font-weight:700;font-size:14px;cursor:pointer;}
+  .btn-primary{background:var(--accent);color:#fff;width:100%;padding:13px;font-size:15px;}
+  .btn-secondary{background:var(--card2);color:var(--text);border:1px solid var(--border);}
+  .btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border);}
+  .btn-block{width:100%;}
+  input[type=file]{display:none;}
+  .status-line{font-size:12px;margin-top:8px;min-height:16px;}
+  .status-ok{color:var(--good);}
+  .status-bad{color:var(--bad);}
+
+  .segmented{display:flex;gap:8px;}
+  .seg-opt{flex:1;text-align:center;padding:10px 6px;border-radius:10px;border:2px solid var(--border);font-weight:700;font-size:13px;cursor:pointer;background:var(--card2);color:var(--muted);}
+  .seg-opt.sel-MAINLINE.selected{border-color:var(--mainline);background:var(--mainline);color:#fff;}
+  .seg-opt.sel-TH.selected{border-color:var(--th);background:var(--th);color:var(--th-text);}
+  .seg-opt.sel-STH.selected{border-color:var(--sth);background:var(--sth);color:var(--sth-text);}
+
+  .badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:800;letter-spacing:.02em;}
+  .badge-MAINLINE{background:var(--mainline);color:#fff;}
+  .badge-TH{background:var(--th);color:var(--th-text);}
+  .badge-STH{background:var(--sth);color:var(--sth-text);}
+
+  .filters{display:flex;flex-direction:column;gap:8px;margin-bottom:14px;}
+  .chip-row{display:flex;gap:6px;flex-wrap:wrap;}
+  .chip{padding:7px 12px;border-radius:20px;border:1px solid var(--border);background:var(--card);font-size:12px;font-weight:700;color:var(--muted);cursor:pointer;}
+  .chip.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+
+  .counts{display:flex;gap:8px;margin-bottom:14px;}
+  .count-box{flex:1;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px;text-align:center;}
+  .count-box .num{font-size:20px;font-weight:800;}
+  .count-box .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;}
+
+  .item-card{display:flex;gap:12px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px;margin-bottom:10px;cursor:pointer;}
+  .item-card img{width:64px;height:64px;object-fit:cover;border-radius:8px;background:var(--card2);flex-shrink:0;}
+  .item-card .noimg{width:64px;height:64px;border-radius:8px;background:var(--card2);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:22px;color:var(--muted);}
+  .item-info{flex:1;min-width:0;}
+  .item-info .name{font-weight:700;font-size:15px;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .item-info .meta{font-size:12px;color:var(--muted);margin-bottom:6px;}
+
+  .empty{text-align:center;color:var(--muted);padding:40px 10px;font-size:14px;}
+
+  .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:50;align-items:flex-end;}
+  .modal-bg.active{display:flex;}
+  .modal{background:var(--card);width:100%;max-height:88vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:18px;}
+  .modal img{width:100%;border-radius:10px;margin-bottom:12px;max-height:280px;object-fit:cover;}
+  .modal-actions{display:flex;gap:10px;margin-top:16px;}
+  .modal-actions .btn{flex:1;}
+
+  .footer-actions{display:flex;gap:10px;margin-top:6px;}
+  .footer-actions .btn{flex:1;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🏎️ Hot Wheels Inventory</h1>
+  <div class="sub">photo → scan → tag STH/TH/Mainline</div>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="add" onclick="switchTab('add')">+ Add Car</button>
+    <button class="tab-btn" data-tab="inv" onclick="switchTab('inv')">Inventory</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ADD SCREEN -->
+  <section id="screen-add" class="screen active">
+    <div class="field">
+      <label>1. Photo of the car</label>
+      <div class="capture-box">
+        <input type="file" accept="image/*" capture="environment" id="carPhotoInput" onchange="handlePhoto(event)">
+        <button class="btn btn-secondary btn-block" onclick="document.getElementById('carPhotoInput').click()">📷 Take / Choose Photo</button>
+        <img id="carPhotoPreview" style="display:none;">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>2. Scan barcode</label>
+      <div class="capture-box">
+        <input type="file" accept="image/*" capture="environment" id="barcodeInput" onchange="handleBarcode(event)">
+        <button class="btn btn-secondary btn-block" onclick="document.getElementById('barcodeInput').click()">📸 Scan Barcode Photo</button>
+        <div class="status-line" id="barcodeStatus"></div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>UPC (auto-filled, editable)</label>
+      <input type="text" id="upcField" placeholder="e.g. 887961234567" inputmode="numeric">
+    </div>
+
+    <div class="field">
+      <label>Casting name</label>
+      <input type="text" id="castingField" placeholder="e.g. '69 Shelby GT-500">
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label>Manufacturer line</label>
+        <input list="mfrOptions" id="mfrField" placeholder="Mainline, Car Culture...">
+        <datalist id="mfrOptions">
+          <option value="Mainline">
+          <option value="Car Culture">
+          <option value="Premium">
+          <option value="RLC">
+          <option value="Team Transport">
+          <option value="Boulevard">
+          <option value="Pop Culture">
+          <option value="Character Cars">
+          <option value="Fast & Furious">
+          <option value="Monster Trucks">
+        </datalist>
+      </div>
+      <div class="field">
+        <label>Series (optional)</label>
+        <input type="text" id="seriesField" placeholder="e.g. HW Speed Graphics">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>3. Rarity tag (required)</label>
+      <div class="segmented" id="raritySeg">
+        <div class="seg-opt sel-MAINLINE" data-val="MAINLINE" onclick="selectRarity('MAINLINE')">Mainline</div>
+        <div class="seg-opt sel-TH" data-val="TH" onclick="selectRarity('TH')">TH</div>
+        <div class="seg-opt sel-STH" data-val="STH" onclick="selectRarity('STH')">Super TH</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Notes (optional)</label>
+      <textarea id="notesField" placeholder="condition, where found, price, etc."></textarea>
+    </div>
+
+    <button class="btn btn-primary" id="saveBtn" onclick="saveItem()">Save to Inventory</button>
+    <div class="status-line" id="saveStatus"></div>
+  </section>
+
+  <!-- INVENTORY SCREEN -->
+  <section id="screen-inv" class="screen">
+    <div class="counts">
+      <div class="count-box"><div class="num" id="cntAll">0</div><div class="lbl">Total</div></div>
+      <div class="count-box"><div class="num" id="cntTH">0</div><div class="lbl">TH</div></div>
+      <div class="count-box"><div class="num" id="cntSTH">0</div><div class="lbl">Super TH</div></div>
+    </div>
+
+    <div class="filters">
+      <input type="search" id="searchField" placeholder="Search casting name..." oninput="renderInventory()">
+      <div class="chip-row" id="rarityChips">
+        <div class="chip active" data-val="ALL" onclick="setRarityFilter('ALL')">All</div>
+        <div class="chip" data-val="MAINLINE" onclick="setRarityFilter('MAINLINE')">Mainline</div>
+        <div class="chip" data-val="TH" onclick="setRarityFilter('TH')">TH</div>
+        <div class="chip" data-val="STH" onclick="setRarityFilter('STH')">Super TH</div>
+      </div>
+      <select id="mfrFilter" onchange="renderInventory()">
+        <option value="ALL">All manufacturers</option>
+      </select>
+    </div>
+
+    <div id="itemList"></div>
+
+    <div class="footer-actions">
+      <button class="btn btn-ghost" onclick="exportData()">Export JSON</button>
+      <button class="btn btn-ghost" onclick="document.getElementById('importInput').click()">Import JSON</button>
+      <input type="file" accept="application/json" id="importInput" style="display:none" onchange="importData(event)">
+    </div>
+  </section>
+
+</main>
+
+<!-- DETAIL MODAL -->
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this) closeModal()">
+  <div class="modal" id="modalBody"></div>
+</div>
+
+<script>
+const STORAGE_KEY = 'hwInventory_v1';
+let items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let currentRarity = null;
+let pendingPhoto = null;
+let rarityFilter = 'ALL';
+let editingId = null;
+
+function switchTab(tab){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
+  document.getElementById('screen-add').classList.toggle('active', tab==='add');
+  document.getElementById('screen-inv').classList.toggle('active', tab==='inv');
+  if(tab==='inv') renderInventory();
+}
+
+// Modern phone cameras shoot very large photos (12-100+ MP). Decoding the full-resolution
+// image into memory before shrinking it (e.g. via FileReader -> base64 -> <img>) can exceed a
+// mobile browser tab's memory budget and crash the page. To avoid that we prefer
+// createImageBitmap() with resize options, which lets the browser downscale *during* decode
+// instead of ever materializing the full-size bitmap. We fall back to an object-URL + <img>
+// approach (still cheaper than base64) only if createImageBitmap isn't available.
+async function resizeImage(file, maxDim, quality){
+  const MAX_INPUT_BYTES = 30 * 1024 * 1024; // sanity cap, just in case
+  if(file.size > MAX_INPUT_BYTES){
+    throw new Error('That photo is very large (' + Math.round(file.size/1024/1024) + 'MB). Try again, or lower your camera resolution in phone settings.');
+  }
+
+  if(typeof createImageBitmap === 'function'){
+    try{
+      const bitmap = await createImageBitmap(file, { resizeWidth: maxDim, resizeQuality: 'medium' });
+      // Some browsers accept resize options without error but ignore them and return the
+      // full-resolution bitmap anyway. Never trust bitmap.width/height blindly -- always
+      // compute the target size ourselves and draw scaled down onto a small canvas, so the
+      // canvas (and the resulting encoded image) never balloon to full camera resolution.
+      let w = bitmap.width, h = bitmap.height;
+      if(w>h && w>maxDim){ h=Math.round(h*maxDim/w); w=maxDim; }
+      else if(h>=w && h>maxDim){ w=Math.round(w*maxDim/h); h=maxDim; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      if(bitmap.close) bitmap.close();
+      return canvas.toDataURL('image/jpeg', quality);
+    }catch(e){
+      // fall through to the fallback path below (some browsers reject resize options entirely)
+    }
+  }
+
+  return new Promise((resolve,reject)=>{
+    const objUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      let w=img.naturalWidth, h=img.naturalHeight;
+      if(w>h && w>maxDim){ h=Math.round(h*maxDim/w); w=maxDim; }
+      else if(h>=w && h>maxDim){ w=Math.round(w*maxDim/h); h=maxDim; }
+      const canvas = document.createElement('canvas');
+      canvas.width=w; canvas.height=h;
+      canvas.getContext('2d').drawImage(img,0,0,w,h);
+      URL.revokeObjectURL(objUrl);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = (e) => { URL.revokeObjectURL(objUrl); reject(new Error('Could not read that photo. Please try again.')); };
+    img.src = objUrl;
+  });
+}
+
+function handlePhoto(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const statusEl = document.getElementById('saveStatus');
+  statusEl.textContent = 'Processing photo...';
+  statusEl.className = 'status-line';
+  resizeImage(file, 900, 0.75).then(dataUrl=>{
+    pendingPhoto = dataUrl;
+    const img = document.getElementById('carPhotoPreview');
+    img.src = dataUrl;
+    img.style.display='block';
+    statusEl.textContent = '';
+  }).catch(err=>{
+    statusEl.textContent = err.message || 'Could not process that photo. Please try again.';
+    statusEl.className = 'status-line status-bad';
+    event.target.value = '';
+  });
+}
+
+function handleBarcode(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const statusEl = document.getElementById('barcodeStatus');
+  statusEl.textContent = 'Decoding...';
+  statusEl.className = 'status-line';
+  resizeImage(file, 1100, 0.9).then(dataUrl=>{
+    Quagga.decodeSingle({
+      src: dataUrl,
+      numOfWorkers: 0,
+      inputStream: { size: 1100 },
+      decoder: { readers: ['upc_reader','ean_reader','ean_8_reader','upc_e_reader','code_128_reader'] },
+      locate: true
+    }, function(result){
+      if(result && result.codeResult && result.codeResult.code){
+        document.getElementById('upcField').value = result.codeResult.code;
+        statusEl.textContent = '✓ Detected: ' + result.codeResult.code;
+        statusEl.className = 'status-line status-ok';
+      } else {
+        statusEl.textContent = 'Could not read barcode — enter UPC manually below.';
+        statusEl.className = 'status-line status-bad';
+      }
+    });
+  }).catch(err=>{
+    statusEl.textContent = err.message || 'Could not process that photo. Enter UPC manually below.';
+    statusEl.className = 'status-line status-bad';
+    event.target.value = '';
+  });
+}
+
+function selectRarity(val){
+  currentRarity = val;
+  document.querySelectorAll('.seg-opt').forEach(el=>{
+    el.classList.toggle('selected', el.dataset.val===val);
+  });
+}
+
+function resetForm(){
+  pendingPhoto = null; currentRarity = null; editingId = null;
+  document.getElementById('carPhotoPreview').style.display='none';
+  document.getElementById('carPhotoInput').value='';
+  document.getElementById('barcodeInput').value='';
+  document.getElementById('barcodeStatus').textContent='';
+  document.getElementById('upcField').value='';
+  document.getElementById('castingField').value='';
+  document.getElementById('mfrField').value='';
+  document.getElementById('seriesField').value='';
+  document.getElementById('notesField').value='';
+  document.querySelectorAll('.seg-opt').forEach(el=>el.classList.remove('selected'));
+  document.getElementById('saveBtn').textContent='Save to Inventory';
+  document.getElementById('saveStatus').textContent='';
+}
+
+function saveItem(){
+  const statusEl = document.getElementById('saveStatus');
+  if(!pendingPhoto){
+    statusEl.textContent = 'Please add a photo of the car.';
+    statusEl.className = 'status-line status-bad';
+    return;
+  }
+  if(!currentRarity){
+    statusEl.textContent = 'Please select a rarity tag (Mainline / TH / Super TH).';
+    statusEl.className = 'status-line status-bad';
+    return;
+  }
+  const item = {
+    id: editingId || (Date.now() + '-' + Math.random().toString(36).slice(2,7)),
+    photo: pendingPhoto,
+    upc: document.getElementById('upcField').value.trim(),
+    casting_name: document.getElementById('castingField').value.trim(),
+    manufacturer_line: document.getElementById('mfrField').value.trim() || 'Mainline',
+    series_name: document.getElementById('seriesField').value.trim(),
+    rarity_tag: currentRarity,
+    notes: document.getElementById('notesField').value.trim(),
+    date_added: editingId ? (items.find(i=>i.id===editingId)||{}).date_added || new Date().toISOString() : new Date().toISOString()
+  };
+  if(editingId){
+    items = items.map(i=> i.id===editingId ? item : i);
+  } else {
+    items.unshift(item);
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  statusEl.textContent = '✓ Saved!';
+  statusEl.className = 'status-line status-ok';
+  setTimeout(()=>{ resetForm(); switchTab('inv'); }, 400);
+}
+
+function setRarityFilter(val){
+  rarityFilter = val;
+  document.querySelectorAll('#rarityChips .chip').forEach(c=>c.classList.toggle('active', c.dataset.val===val));
+  renderInventory();
+}
+
+function populateMfrFilter(){
+  const sel = document.getElementById('mfrFilter');
+  const current = sel.value;
+  const mfrs = Array.from(new Set(items.map(i=>i.manufacturer_line).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="ALL">All manufacturers</option>' + mfrs.map(m=>`<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+  if(mfrs.includes(current)) sel.value = current;
+}
+
+function escapeHtml(s){
+  return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderInventory(){
+  populateMfrFilter();
+  const search = document.getElementById('searchField').value.trim().toLowerCase();
+  const mfrFilter = document.getElementById('mfrFilter').value;
+
+  document.getElementById('cntAll').textContent = items.length;
+  document.getElementById('cntTH').textContent = items.filter(i=>i.rarity_tag==='TH').length;
+  document.getElementById('cntSTH').textContent = items.filter(i=>i.rarity_tag==='STH').length;
+
+  let filtered = items;
+  if(rarityFilter !== 'ALL') filtered = filtered.filter(i=>i.rarity_tag===rarityFilter);
+  if(mfrFilter !== 'ALL') filtered = filtered.filter(i=>i.manufacturer_line===mfrFilter);
+  if(search) filtered = filtered.filter(i=> (i.casting_name||'').toLowerCase().includes(search));
+
+  const listEl = document.getElementById('itemList');
+  if(filtered.length===0){
+    listEl.innerHTML = '<div class="empty">No cars match yet. Add one from the + Add Car tab.</div>';
+    return;
+  }
+  listEl.innerHTML = filtered.map(i=>`
+    <div class="item-card" onclick="openModal('${i.id}')">
+      ${i.photo ? `<img src="${i.photo}">` : `<div class="noimg">🚗</div>`}
+      <div class="item-info">
+        <div class="name">${escapeHtml(i.casting_name || 'Unnamed casting')}</div>
+        <div class="meta">${escapeHtml(i.manufacturer_line || '—')}${i.series_name ? ' · ' + escapeHtml(i.series_name) : ''}</div>
+        <span class="badge badge-${i.rarity_tag}">${i.rarity_tag === 'STH' ? 'SUPER TH' : i.rarity_tag}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openModal(id){
+  const item = items.find(i=>i.id===id);
+  if(!item) return;
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    ${item.photo ? `<img src="${item.photo}">` : ''}
+    <span class="badge badge-${item.rarity_tag}">${item.rarity_tag === 'STH' ? 'SUPER TH' : item.rarity_tag}</span>
+    <h2 style="margin:10px 0 4px;">${escapeHtml(item.casting_name || 'Unnamed casting')}</h2>
+    <div style="color:var(--muted);font-size:13px;margin-bottom:10px;">
+      ${escapeHtml(item.manufacturer_line || '—')}${item.series_name ? ' · ' + escapeHtml(item.series_name) : ''}
+    </div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:4px;">UPC: ${escapeHtml(item.upc || '—')}</div>
+    ${item.notes ? `<div style="font-size:14px;margin-top:8px;white-space:pre-wrap;">${escapeHtml(item.notes)}</div>` : ''}
+    <div style="font-size:11px;color:var(--muted);margin-top:12px;">Added ${new Date(item.date_added).toLocaleDateString()}</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="editItem('${item.id}')">Edit</button>
+      <button class="btn btn-ghost" style="color:var(--bad);border-color:var(--bad);" onclick="deleteItem('${item.id}')">Delete</button>
+    </div>
+  `;
+  document.getElementById('modalBg').classList.add('active');
+}
+
+function closeModal(){
+  document.getElementById('modalBg').classList.remove('active');
+}
+
+function editItem(id){
+  const item = items.find(i=>i.id===id);
+  if(!item) return;
+  closeModal();
+  switchTab('add');
+  editingId = id;
+  pendingPhoto = item.photo;
+  currentRarity = item.rarity_tag;
+  document.getElementById('carPhotoPreview').src = item.photo;
+  document.getElementById('carPhotoPreview').style.display='block';
+  document.getElementById('upcField').value = item.upc || '';
+  document.getElementById('castingField').value = item.casting_name || '';
+  document.getElementById('mfrField').value = item.manufacturer_line || '';
+  document.getElementById('seriesField').value = item.series_name || '';
+  document.getElementById('notesField').value = item.notes || '';
+  document.querySelectorAll('.seg-opt').forEach(el=>el.classList.toggle('selected', el.dataset.val===item.rarity_tag));
+  document.getElementById('saveBtn').textContent='Update Car';
+}
+
+function deleteItem(id){
+  if(!confirm('Delete this car from your inventory?')) return;
+  items = items.filter(i=>i.id!==id);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  closeModal();
+  renderInventory();
+}
+
+function exportData(){
+  const blob = new Blob([JSON.stringify(items, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'hotwheels_inventory_backup_' + new Date().toISOString().slice(0,10) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function importData(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const imported = JSON.parse(e.target.result);
+      if(!Array.isArray(imported)) throw new Error('bad format');
+      const replace = confirm('Replace current inventory with imported file? Cancel to merge instead.');
+      if(replace){
+        items = imported;
+      } else {
+        const existingIds = new Set(items.map(i=>i.id));
+        imported.forEach(i=>{ if(!existingIds.has(i.id)) items.push(i); });
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+      renderInventory();
+      alert('Import complete. ' + items.length + ' cars in inventory.');
+    }catch(err){
+      alert('Could not read that file as a valid inventory export.');
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+}
+
+renderInventory();
+</script>
+</body>
+</html>
