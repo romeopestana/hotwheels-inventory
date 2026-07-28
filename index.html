@@ -17,7 +17,7 @@
   header h1{font-size:18px;margin:0 0 2px;}
   header .sub{font-size:12px;color:var(--muted);}
   .tabs{display:flex;gap:8px;margin-top:10px;}
-  .tab-btn{flex:1;padding:9px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:14px;font-weight:600;}
+  .tab-btn{flex:1;padding:9px 4px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-weight:600;}
   .tab-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
   main{padding:14px 16px 20px;max-width:640px;margin:0 auto;}
   .screen{display:none;}
@@ -92,8 +92,9 @@
   <h1>🏎️ Hot Wheels Inventory</h1>
   <div class="sub">photo → scan → tag STH/TH/Mainline</div>
   <div class="tabs">
-    <button class="tab-btn active" data-tab="add" onclick="switchTab('add')">+ Add Car</button>
+    <button class="tab-btn active" data-tab="add" onclick="switchTab('add')">+ Add</button>
     <button class="tab-btn" data-tab="inv" onclick="switchTab('inv')">Inventory</button>
+    <button class="tab-btn" data-tab="wish" onclick="switchTab('wish')">Wishlist</button>
   </div>
 </header>
 
@@ -200,6 +201,48 @@
     </div>
   </section>
 
+  <!-- WISHLIST SCREEN -->
+  <section id="screen-wish" class="screen">
+    <div class="field">
+      <label>Photo of the car you want (optional)</label>
+      <div class="capture-box">
+        <input type="file" accept="image/*" capture="environment" id="wishPhotoInput" onchange="handleWishPhoto(event)">
+        <button class="btn btn-secondary btn-block" onclick="document.getElementById('wishPhotoInput').click()">📷 Take / Choose Photo</button>
+        <img id="wishPhotoPreview" style="display:none;">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Car name</label>
+      <input type="text" id="wishNameField" placeholder="e.g. '18 Dodge Demon">
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label>Series (optional)</label>
+        <input type="text" id="wishSeriesField" placeholder="e.g. HW Exotics">
+      </div>
+      <div class="field">
+        <label>Colour (optional)</label>
+        <input type="text" id="wishColourField" placeholder="e.g. Candy Blue">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Notes (optional)</label>
+      <textarea id="wishNotesField" placeholder="where you've seen it, target price, etc."></textarea>
+    </div>
+
+    <button class="btn btn-primary" id="wishSaveBtn" onclick="saveWishItem()">Add to Wishlist</button>
+    <div class="status-line" id="wishSaveStatus"></div>
+
+    <div class="counts" style="margin-top:20px;">
+      <div class="count-box"><div class="num" id="cntWish">0</div><div class="lbl">Wanted</div></div>
+    </div>
+
+    <div id="wishList"></div>
+  </section>
+
 </main>
 
 <!-- DETAIL MODAL -->
@@ -209,17 +252,29 @@
 
 <script>
 const STORAGE_KEY = 'hwInventory_v1';
+const WISH_STORAGE_KEY = 'hwWishlist_v1';
 let items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let wishItems = JSON.parse(localStorage.getItem(WISH_STORAGE_KEY) || '[]');
 let currentRarity = null;
 let pendingPhoto = null;
 let rarityFilter = 'ALL';
 let editingId = null;
+let wishPendingPhoto = null;
+let wishEditingId = null;
+
+// Stored photo dimensions -- kept small since every saved photo lives in localStorage on
+// the phone. 520px / 0.68 quality keeps images clearly recognizable for a small collection
+// card/thumbnail while using a fraction of the space of a full camera photo.
+const PHOTO_MAX_DIM = 520;
+const PHOTO_QUALITY = 0.68;
 
 function switchTab(tab){
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
   document.getElementById('screen-add').classList.toggle('active', tab==='add');
   document.getElementById('screen-inv').classList.toggle('active', tab==='inv');
+  document.getElementById('screen-wish').classList.toggle('active', tab==='wish');
   if(tab==='inv') renderInventory();
+  if(tab==='wish') renderWishlist();
 }
 
 // Modern phone cameras shoot very large photos (12-100+ MP). Decoding the full-resolution
@@ -279,9 +334,28 @@ function handlePhoto(event){
   const statusEl = document.getElementById('saveStatus');
   statusEl.textContent = 'Processing photo...';
   statusEl.className = 'status-line';
-  resizeImage(file, 900, 0.75).then(dataUrl=>{
+  resizeImage(file, PHOTO_MAX_DIM, PHOTO_QUALITY).then(dataUrl=>{
     pendingPhoto = dataUrl;
     const img = document.getElementById('carPhotoPreview');
+    img.src = dataUrl;
+    img.style.display='block';
+    statusEl.textContent = '';
+  }).catch(err=>{
+    statusEl.textContent = err.message || 'Could not process that photo. Please try again.';
+    statusEl.className = 'status-line status-bad';
+    event.target.value = '';
+  });
+}
+
+function handleWishPhoto(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const statusEl = document.getElementById('wishSaveStatus');
+  statusEl.textContent = 'Processing photo...';
+  statusEl.className = 'status-line';
+  resizeImage(file, PHOTO_MAX_DIM, PHOTO_QUALITY).then(dataUrl=>{
+    wishPendingPhoto = dataUrl;
+    const img = document.getElementById('wishPhotoPreview');
     img.src = dataUrl;
     img.style.display='block';
     statusEl.textContent = '';
@@ -481,8 +555,136 @@ function deleteItem(id){
   renderInventory();
 }
 
+function resetWishForm(){
+  wishPendingPhoto = null; wishEditingId = null;
+  document.getElementById('wishPhotoPreview').style.display='none';
+  document.getElementById('wishPhotoInput').value='';
+  document.getElementById('wishNameField').value='';
+  document.getElementById('wishSeriesField').value='';
+  document.getElementById('wishColourField').value='';
+  document.getElementById('wishNotesField').value='';
+  document.getElementById('wishSaveBtn').textContent='Add to Wishlist';
+  document.getElementById('wishSaveStatus').textContent='';
+}
+
+function saveWishItem(){
+  const statusEl = document.getElementById('wishSaveStatus');
+  const name = document.getElementById('wishNameField').value.trim();
+  if(!name){
+    statusEl.textContent = 'Please enter a car name.';
+    statusEl.className = 'status-line status-bad';
+    return;
+  }
+  const wishItem = {
+    id: wishEditingId || (Date.now() + '-' + Math.random().toString(36).slice(2,7)),
+    photo: wishPendingPhoto,
+    car_name: name,
+    series_name: document.getElementById('wishSeriesField').value.trim(),
+    colour: document.getElementById('wishColourField').value.trim(),
+    notes: document.getElementById('wishNotesField').value.trim(),
+    date_added: wishEditingId ? (wishItems.find(i=>i.id===wishEditingId)||{}).date_added || new Date().toISOString() : new Date().toISOString()
+  };
+  if(wishEditingId){
+    wishItems = wishItems.map(i=> i.id===wishEditingId ? wishItem : i);
+  } else {
+    wishItems.unshift(wishItem);
+  }
+  localStorage.setItem(WISH_STORAGE_KEY, JSON.stringify(wishItems));
+  statusEl.textContent = '✓ Added!';
+  statusEl.className = 'status-line status-ok';
+  setTimeout(()=>{ resetWishForm(); renderWishlist(); }, 400);
+}
+
+function renderWishlist(){
+  document.getElementById('cntWish').textContent = wishItems.length;
+  const listEl = document.getElementById('wishList');
+  if(wishItems.length===0){
+    listEl.innerHTML = '<div class="empty">Nothing on your wishlist yet. Add a car you\'re hunting for above.</div>';
+    return;
+  }
+  listEl.innerHTML = wishItems.map(i=>`
+    <div class="item-card" onclick="openWishModal('${i.id}')">
+      ${i.photo ? `<img src="${i.photo}">` : `<div class="noimg">🔍</div>`}
+      <div class="item-info">
+        <div class="name">${escapeHtml(i.car_name)}</div>
+        <div class="meta">${escapeHtml(i.series_name || '—')}${i.colour ? ' · ' + escapeHtml(i.colour) : ''}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openWishModal(id){
+  const item = wishItems.find(i=>i.id===id);
+  if(!item) return;
+  const body = document.getElementById('modalBody');
+  body.innerHTML = `
+    ${item.photo ? `<img src="${item.photo}">` : ''}
+    <h2 style="margin:10px 0 4px;">${escapeHtml(item.car_name)}</h2>
+    <div style="color:var(--muted);font-size:13px;margin-bottom:10px;">
+      ${escapeHtml(item.series_name || '—')}${item.colour ? ' · ' + escapeHtml(item.colour) : ''}
+    </div>
+    ${item.notes ? `<div style="font-size:14px;margin-top:8px;white-space:pre-wrap;">${escapeHtml(item.notes)}</div>` : ''}
+    <div style="font-size:11px;color:var(--muted);margin-top:12px;">Added ${new Date(item.date_added).toLocaleDateString()}</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="editWishItem('${item.id}')">Edit</button>
+      <button class="btn btn-ghost" style="color:var(--bad);border-color:var(--bad);" onclick="deleteWishItem('${item.id}')">Delete</button>
+    </div>
+    <button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="moveWishToInventory('${item.id}')">Found it! Add to Inventory →</button>
+  `;
+  document.getElementById('modalBg').classList.add('active');
+}
+
+function editWishItem(id){
+  const item = wishItems.find(i=>i.id===id);
+  if(!item) return;
+  closeModal();
+  switchTab('wish');
+  wishEditingId = id;
+  wishPendingPhoto = item.photo;
+  if(item.photo){
+    document.getElementById('wishPhotoPreview').src = item.photo;
+    document.getElementById('wishPhotoPreview').style.display='block';
+  }
+  document.getElementById('wishNameField').value = item.car_name || '';
+  document.getElementById('wishSeriesField').value = item.series_name || '';
+  document.getElementById('wishColourField').value = item.colour || '';
+  document.getElementById('wishNotesField').value = item.notes || '';
+  document.getElementById('wishSaveBtn').textContent='Update Wishlist Item';
+}
+
+function deleteWishItem(id){
+  if(!confirm('Remove this car from your wishlist?')) return;
+  wishItems = wishItems.filter(i=>i.id!==id);
+  localStorage.setItem(WISH_STORAGE_KEY, JSON.stringify(wishItems));
+  closeModal();
+  renderWishlist();
+}
+
+// Bridge: prefill the Add Car form from a wishlist entry once the collector has actually
+// found/bought it. The wishlist entry is left in place (not auto-deleted) so nothing is lost
+// if the user backs out of saving -- they can delete it manually from the wishlist afterward.
+function moveWishToInventory(id){
+  const item = wishItems.find(i=>i.id===id);
+  if(!item) return;
+  closeModal();
+  switchTab('add');
+  resetForm();
+  pendingPhoto = item.photo;
+  if(item.photo){
+    document.getElementById('carPhotoPreview').src = item.photo;
+    document.getElementById('carPhotoPreview').style.display='block';
+  }
+  document.getElementById('castingField').value = item.car_name || '';
+  document.getElementById('seriesField').value = item.series_name || '';
+  const notesParts = [];
+  if(item.colour) notesParts.push('Colour: ' + item.colour);
+  if(item.notes) notesParts.push(item.notes);
+  document.getElementById('notesField').value = notesParts.join(' — ');
+}
+
 function exportData(){
-  const blob = new Blob([JSON.stringify(items, null, 2)], {type:'application/json'});
+  const payload = { inventory: items, wishlist: wishItems };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -499,18 +701,27 @@ function importData(event){
   const reader = new FileReader();
   reader.onload = e => {
     try{
-      const imported = JSON.parse(e.target.result);
-      if(!Array.isArray(imported)) throw new Error('bad format');
-      const replace = confirm('Replace current inventory with imported file? Cancel to merge instead.');
+      const parsed = JSON.parse(e.target.result);
+      // Support both the current {inventory, wishlist} export format and the older
+      // plain-array format (inventory only) from before the Wishlist tab existed.
+      const importedInventory = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.inventory) ? parsed.inventory : null);
+      const importedWishlist = Array.isArray(parsed) ? [] : (Array.isArray(parsed.wishlist) ? parsed.wishlist : []);
+      if(!importedInventory) throw new Error('bad format');
+      const replace = confirm('Replace current inventory & wishlist with imported file? Cancel to merge instead.');
       if(replace){
-        items = imported;
+        items = importedInventory;
+        wishItems = importedWishlist;
       } else {
         const existingIds = new Set(items.map(i=>i.id));
-        imported.forEach(i=>{ if(!existingIds.has(i.id)) items.push(i); });
+        importedInventory.forEach(i=>{ if(!existingIds.has(i.id)) items.push(i); });
+        const existingWishIds = new Set(wishItems.map(i=>i.id));
+        importedWishlist.forEach(i=>{ if(!existingWishIds.has(i.id)) wishItems.push(i); });
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+      localStorage.setItem(WISH_STORAGE_KEY, JSON.stringify(wishItems));
       renderInventory();
-      alert('Import complete. ' + items.length + ' cars in inventory.');
+      renderWishlist();
+      alert('Import complete. ' + items.length + ' cars in inventory, ' + wishItems.length + ' on wishlist.');
     }catch(err){
       alert('Could not read that file as a valid inventory export.');
     }
@@ -520,6 +731,7 @@ function importData(event){
 }
 
 renderInventory();
+renderWishlist();
 </script>
 </body>
 </html>
