@@ -267,7 +267,7 @@
 <script>
 // Bump this with every meaningful change so testers can confirm which version is loaded
 // (shown in the header, and stamped into JSON backups).
-const APP_VERSION = 'v1.3.0';
+const APP_VERSION = 'v1.3.1';
 document.getElementById('versionTag').textContent = APP_VERSION;
 
 const STORAGE_KEY = 'hwInventory_v1';
@@ -395,10 +395,19 @@ function handleWishPhoto(event){
 // This requires a secure context (https), which the hosted version of this app satisfies.
 let scannerRunning = false;
 
+// Quagga fires onDetected for every single frame it manages to decode, with zero confirmation
+// -- pointed anywhere near text or other numbers, it will happily lock onto a false read in a
+// fraction of a second. We require the SAME code to be read several frames in a row before
+// accepting it (a standard debounce technique for live barcode scanning), which filters out
+// one-off misreads without meaningfully slowing down a genuine, steady scan.
+const SCAN_CONFIRM_COUNT = 4;
+let scanBuffer = { code: null, count: 0 };
+
 function startBarcodeScanner(){
   const statusEl = document.getElementById('barcodeStatus');
   statusEl.textContent = '';
   statusEl.className = 'status-line';
+  scanBuffer = { code: null, count: 0 };
 
   if(typeof Quagga === 'undefined'){
     statusEl.textContent = 'Barcode scanner failed to load — enter UPC manually below.';
@@ -422,7 +431,11 @@ function startBarcodeScanner(){
       target: target,
       constraints: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
     },
-    decoder: { readers: ['upc_reader','ean_reader','ean_8_reader','upc_e_reader','code_128_reader'] },
+    // Narrowed to the formats actually used on retail packaging (UPC-A / EAN-13, plus the
+    // shorter UPC-E / EAN-8 variants). code_128_reader was dropped -- it's a general-purpose
+    // symbology unrelated to retail barcodes and was a common source of false-positive reads
+    // on background text/patterns.
+    decoder: { readers: ['upc_reader','ean_reader','ean_8_reader','upc_e_reader'] },
     locate: true
   }, function(err){
     if(err){
@@ -441,8 +454,21 @@ function startBarcodeScanner(){
 function onBarcodeDetected(result){
   if(!result || !result.codeResult || !result.codeResult.code) return;
   const code = result.codeResult.code;
-  document.getElementById('upcField').value = code;
   const statusEl = document.getElementById('barcodeStatus');
+
+  if(code === scanBuffer.code){
+    scanBuffer.count++;
+  } else {
+    scanBuffer = { code: code, count: 1 };
+  }
+
+  if(scanBuffer.count < SCAN_CONFIRM_COUNT){
+    statusEl.textContent = 'Reading... hold steady (' + scanBuffer.count + '/' + SCAN_CONFIRM_COUNT + ')';
+    statusEl.className = 'status-line';
+    return;
+  }
+
+  document.getElementById('upcField').value = code;
   statusEl.textContent = '✓ Detected: ' + code;
   statusEl.className = 'status-line status-ok';
   stopBarcodeScanner();
@@ -454,6 +480,7 @@ function stopBarcodeScanner(){
     try{ Quagga.stop(); }catch(e){}
     scannerRunning = false;
   }
+  scanBuffer = { code: null, count: 0 };
   document.getElementById('scannerBg').classList.remove('active');
 }
 
