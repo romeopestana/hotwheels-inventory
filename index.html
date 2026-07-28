@@ -16,6 +16,7 @@
   header{position:sticky;top:0;background:var(--bg);padding:14px 16px 10px;border-bottom:1px solid var(--border);z-index:10;}
   header h1{font-size:18px;margin:0 0 2px;}
   header .sub{font-size:12px;color:var(--muted);}
+  .version-tag{font-size:11px;font-weight:600;color:var(--muted);background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:2px 7px;vertical-align:middle;margin-left:4px;}
   .tabs{display:flex;gap:8px;margin-top:10px;}
   .tab-btn{flex:1;padding:9px 4px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:13px;font-weight:600;}
   .tab-btn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
@@ -84,12 +85,19 @@
 
   .footer-actions{display:flex;gap:10px;margin-top:6px;}
   .footer-actions .btn{flex:1;}
+
+  .scanner-bg{display:none;position:fixed;inset:0;background:#000;z-index:70;flex-direction:column;align-items:center;justify-content:center;padding:20px;gap:16px;}
+  .scanner-bg.active{display:flex;}
+  .scanner-target{width:100%;max-width:480px;aspect-ratio:4/3;position:relative;overflow:hidden;border-radius:12px;background:#111;}
+  .scanner-target video, .scanner-target canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
+  .scanner-hint{color:var(--muted);font-size:13px;text-align:center;}
+  #scannerCancelBtn{width:100%;max-width:480px;}
 </style>
 </head>
 <body>
 
 <header>
-  <h1>🏎️ Hot Wheels Inventory</h1>
+  <h1>🏎️ Hot Wheels Inventory <span class="version-tag" id="versionTag"></span></h1>
   <div class="sub">photo → scan → tag STH/TH/Mainline</div>
   <div class="tabs">
     <button class="tab-btn active" data-tab="add" onclick="switchTab('add')">+ Add</button>
@@ -114,8 +122,7 @@
     <div class="field">
       <label>2. Scan barcode</label>
       <div class="capture-box">
-        <input type="file" accept="image/*" capture="environment" id="barcodeInput" onchange="handleBarcode(event)">
-        <button class="btn btn-secondary btn-block" onclick="document.getElementById('barcodeInput').click()">📸 Scan Barcode Photo</button>
+        <button class="btn btn-secondary btn-block" onclick="startBarcodeScanner()">📷 Scan Barcode (Live Camera)</button>
         <div class="status-line" id="barcodeStatus"></div>
       </div>
     </div>
@@ -250,7 +257,19 @@
   <div class="modal" id="modalBody"></div>
 </div>
 
+<!-- LIVE BARCODE SCANNER OVERLAY -->
+<div class="scanner-bg" id="scannerBg">
+  <div class="scanner-target" id="scannerTarget"></div>
+  <div class="scanner-hint">Point your camera at the barcode</div>
+  <button class="btn btn-secondary" id="scannerCancelBtn" onclick="stopBarcodeScanner()">Cancel</button>
+</div>
+
 <script>
+// Bump this with every meaningful change so testers can confirm which version is loaded
+// (shown in the header, and stamped into JSON backups).
+const APP_VERSION = 'v1.3.0';
+document.getElementById('versionTag').textContent = APP_VERSION;
+
 const STORAGE_KEY = 'hwInventory_v1';
 const WISH_STORAGE_KEY = 'hwWishlist_v1';
 let items = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
@@ -269,6 +288,7 @@ const PHOTO_MAX_DIM = 520;
 const PHOTO_QUALITY = 0.68;
 
 function switchTab(tab){
+  if(tab !== 'add') stopBarcodeScanner(); // release the camera if we're navigating away mid-scan
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
   document.getElementById('screen-add').classList.toggle('active', tab==='add');
   document.getElementById('screen-inv').classList.toggle('active', tab==='inv');
@@ -366,34 +386,75 @@ function handleWishPhoto(event){
   });
 }
 
-function handleBarcode(event){
-  const file = event.target.files[0];
-  if(!file) return;
+// Barcode scanning uses a LIVE camera stream (Quagga's LiveStream mode) instead of capturing
+// a full still photo and decoding it. This was previously done by asking the phone's camera
+// app for a photo (often 12-100+ MP) and decoding that whole image -- doing this right after
+// already decoding a full-res car photo could push some phones (Android and iPhone alike)
+// over their available memory and crash with a "low memory" error. A live video stream only
+// ever processes small, fixed-resolution frames, so no full-resolution image is ever decoded.
+// This requires a secure context (https), which the hosted version of this app satisfies.
+let scannerRunning = false;
+
+function startBarcodeScanner(){
   const statusEl = document.getElementById('barcodeStatus');
-  statusEl.textContent = 'Decoding...';
+  statusEl.textContent = '';
   statusEl.className = 'status-line';
-  resizeImage(file, 1100, 0.9).then(dataUrl=>{
-    Quagga.decodeSingle({
-      src: dataUrl,
-      numOfWorkers: 0,
-      inputStream: { size: 1100 },
-      decoder: { readers: ['upc_reader','ean_reader','ean_8_reader','upc_e_reader','code_128_reader'] },
-      locate: true
-    }, function(result){
-      if(result && result.codeResult && result.codeResult.code){
-        document.getElementById('upcField').value = result.codeResult.code;
-        statusEl.textContent = '✓ Detected: ' + result.codeResult.code;
-        statusEl.className = 'status-line status-ok';
-      } else {
-        statusEl.textContent = 'Could not read barcode — enter UPC manually below.';
-        statusEl.className = 'status-line status-bad';
-      }
-    });
-  }).catch(err=>{
-    statusEl.textContent = err.message || 'Could not process that photo. Enter UPC manually below.';
+
+  if(typeof Quagga === 'undefined'){
+    statusEl.textContent = 'Barcode scanner failed to load — enter UPC manually below.';
     statusEl.className = 'status-line status-bad';
-    event.target.value = '';
+    return;
+  }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    statusEl.textContent = 'Camera not available on this browser — enter UPC manually below.';
+    statusEl.className = 'status-line status-bad';
+    return;
+  }
+
+  const target = document.getElementById('scannerTarget');
+  target.innerHTML = '';
+  document.getElementById('scannerBg').classList.add('active');
+
+  Quagga.init({
+    inputStream: {
+      name: 'Live',
+      type: 'LiveStream',
+      target: target,
+      constraints: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }
+    },
+    decoder: { readers: ['upc_reader','ean_reader','ean_8_reader','upc_e_reader','code_128_reader'] },
+    locate: true
+  }, function(err){
+    if(err){
+      console.error(err);
+      document.getElementById('scannerBg').classList.remove('active');
+      statusEl.textContent = 'Could not access camera — enter UPC manually below.';
+      statusEl.className = 'status-line status-bad';
+      return;
+    }
+    scannerRunning = true;
+    Quagga.onDetected(onBarcodeDetected);
+    Quagga.start();
   });
+}
+
+function onBarcodeDetected(result){
+  if(!result || !result.codeResult || !result.codeResult.code) return;
+  const code = result.codeResult.code;
+  document.getElementById('upcField').value = code;
+  const statusEl = document.getElementById('barcodeStatus');
+  statusEl.textContent = '✓ Detected: ' + code;
+  statusEl.className = 'status-line status-ok';
+  stopBarcodeScanner();
+}
+
+function stopBarcodeScanner(){
+  if(scannerRunning){
+    try{ Quagga.offDetected(onBarcodeDetected); }catch(e){}
+    try{ Quagga.stop(); }catch(e){}
+    scannerRunning = false;
+  }
+  document.getElementById('scannerBg').classList.remove('active');
 }
 
 function selectRarity(val){
@@ -404,10 +465,10 @@ function selectRarity(val){
 }
 
 function resetForm(){
+  stopBarcodeScanner();
   pendingPhoto = null; currentRarity = null; editingId = null;
   document.getElementById('carPhotoPreview').style.display='none';
   document.getElementById('carPhotoInput').value='';
-  document.getElementById('barcodeInput').value='';
   document.getElementById('barcodeStatus').textContent='';
   document.getElementById('upcField').value='';
   document.getElementById('castingField').value='';
@@ -683,7 +744,7 @@ function moveWishToInventory(id){
 }
 
 function exportData(){
-  const payload = { inventory: items, wishlist: wishItems };
+  const payload = { app_version: APP_VERSION, inventory: items, wishlist: wishItems };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
