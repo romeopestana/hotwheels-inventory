@@ -273,7 +273,7 @@
 <script>
 // Bump this with every meaningful change so testers can confirm which version is loaded
 // (shown in the header, and stamped into JSON backups).
-const APP_VERSION = 'v1.4.1';
+const APP_VERSION = 'v1.5.0';
 document.getElementById('versionTag').textContent = APP_VERSION;
 
 const STORAGE_KEY = 'hwInventory_v1';
@@ -286,6 +286,7 @@ let rarityFilter = 'ALL';
 let editingId = null;
 let wishPendingPhoto = null;
 let wishEditingId = null;
+let movingWishId = null; // set when the Add Car form was prefilled from a wishlist item, so a successful save can remove it from the wishlist
 
 // Stored photo dimensions -- kept small since every saved photo lives in localStorage on
 // the phone. 520px / 0.68 quality keeps images clearly recognizable for a small collection
@@ -294,7 +295,13 @@ const PHOTO_MAX_DIM = 520;
 const PHOTO_QUALITY = 0.68;
 
 function switchTab(tab){
-  if(tab !== 'add') stopBarcodeScanner(); // release the camera if we're navigating away mid-scan
+  if(tab !== 'add'){
+    stopBarcodeScanner(); // release the camera if we're navigating away mid-scan
+    // Don't clear the in-progress draft (photo/fields) just for tapping another tab -- but DO
+    // drop the wishlist-bridge link, so a later, unrelated save can never delete the wrong
+    // wishlist item. If the user comes back and re-triggers "Found it!" it gets reset properly.
+    movingWishId = null;
+  }
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
   document.getElementById('screen-add').classList.toggle('active', tab==='add');
   document.getElementById('screen-inv').classList.toggle('active', tab==='inv');
@@ -499,7 +506,7 @@ function selectRarity(val){
 
 function resetForm(){
   stopBarcodeScanner();
-  pendingPhoto = null; currentRarity = null; editingId = null;
+  pendingPhoto = null; currentRarity = null; editingId = null; movingWishId = null;
   document.getElementById('carPhotoPreview').style.display='none';
   document.getElementById('carPhotoInput').value='';
   document.getElementById('barcodeStatus').textContent='';
@@ -542,6 +549,14 @@ function saveItem(){
     items.unshift(item);
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+
+  // If this car was prefilled from a wishlist entry ("Found it! Add to Inventory"), it's now
+  // safely saved into the collection, so remove the matching wishlist entry.
+  if(movingWishId){
+    wishItems = wishItems.filter(i=>i.id!==movingWishId);
+    localStorage.setItem(WISH_STORAGE_KEY, JSON.stringify(wishItems));
+  }
+
   statusEl.textContent = '✓ Saved!';
   statusEl.className = 'status-line status-ok';
   setTimeout(()=>{ resetForm(); switchTab('inv'); }, 400);
@@ -755,14 +770,16 @@ function deleteWishItem(id){
 }
 
 // Bridge: prefill the Add Car form from a wishlist entry once the collector has actually
-// found/bought it. The wishlist entry is left in place (not auto-deleted) so nothing is lost
-// if the user backs out of saving -- they can delete it manually from the wishlist afterward.
+// found/bought it. The wishlist entry stays in place until the car is actually saved into
+// the inventory (movingWishId marks it for removal at that point) -- so nothing is lost if
+// the user backs out of the Add Car form without saving.
 function moveWishToInventory(id){
   const item = wishItems.find(i=>i.id===id);
   if(!item) return;
   closeModal();
   switchTab('add');
   resetForm();
+  movingWishId = id;
   pendingPhoto = item.photo;
   if(item.photo){
     document.getElementById('carPhotoPreview').src = item.photo;
