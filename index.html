@@ -289,7 +289,7 @@
 <script>
 // Bump this with every meaningful change so testers can confirm which version is loaded
 // (shown in the header, and stamped into JSON backups).
-const APP_VERSION = 'v1.6.1';
+const APP_VERSION = 'v1.6.2';
 document.getElementById('versionTag').textContent = APP_VERSION;
 
 const STORAGE_KEY = 'hwInventory_v1';
@@ -722,11 +722,29 @@ function saveItem(){
     return;
   }
   const upc = document.getElementById('upcField').value.trim();
+  const castingName = document.getElementById('castingField').value.trim();
+  const warnedIds = new Set();
+
   if(upc){
     const dupe = items.find(i => i.upc === upc && i.id !== editingId);
     if(dupe){
+      warnedIds.add(dupe.id);
       const label = dupe.casting_name || 'another car';
       if(!confirm('You already have "' + label + '" with this UPC. Add anyway?')) return;
+    }
+  }
+
+  // Second check: casting name — useful when the barcode is damaged, covered by a price
+  // sticker, or was never scanned. Case-insensitive; empty names are skipped.
+  if(castingName){
+    const castingKey = castingName.toLowerCase();
+    const dupe = items.find(i =>
+      i.id !== editingId &&
+      !warnedIds.has(i.id) &&
+      (i.casting_name || '').trim().toLowerCase() === castingKey
+    );
+    if(dupe){
+      if(!confirm('You already have a car named "' + (dupe.casting_name || castingName) + '". Add anyway?')) return;
     }
   }
   const item = {
