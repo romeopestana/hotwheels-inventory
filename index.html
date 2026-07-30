@@ -98,6 +98,12 @@
   .scanner-target video, .scanner-target canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;}
   .scanner-hint{color:var(--muted);font-size:13px;text-align:center;}
   #scannerCancelBtn{width:100%;max-width:480px;}
+
+  .picker-hint{font-size:13px;color:var(--muted);margin:0 0 14px;}
+  .picker-item{display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border-radius:10px;border:1px solid var(--border);background:var(--card2);color:var(--text);cursor:pointer;}
+  .picker-item:active{background:var(--border);}
+  .picker-name{font-weight:700;font-size:15px;margin-bottom:3px;}
+  .picker-meta{font-size:12px;color:var(--muted);}
 </style>
 </head>
 <body>
@@ -135,7 +141,7 @@
 
     <div class="field">
       <label>UPC (auto-filled, editable)</label>
-      <input type="text" id="upcField" placeholder="e.g. 887961234567" inputmode="numeric">
+      <input type="text" id="upcField" placeholder="e.g. 887961234567" inputmode="numeric" onblur="onUpcFieldBlur()">
     </div>
 
     <div class="field">
@@ -263,6 +269,16 @@
   <div class="modal" id="modalBody"></div>
 </div>
 
+<!-- UPC DISAMBIGUATION (shared assortment codes) -->
+<div class="modal-bg" id="upcPickerBg" onclick="if(event.target===this) closeUpcPicker()">
+  <div class="modal" id="upcPickerBody">
+    <h3 style="margin:0 0 6px;">Multiple cars share this UPC</h3>
+    <p class="picker-hint">Mainline cases often use one barcode for the whole assortment. Pick the casting that matches your card.</p>
+    <div id="upcPickerList"></div>
+    <button type="button" class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="closeUpcPicker()">Enter manually instead</button>
+  </div>
+</div>
+
 <!-- LIVE BARCODE SCANNER OVERLAY -->
 <div class="scanner-bg" id="scannerBg">
   <div class="scanner-target" id="scannerTarget"></div>
@@ -273,7 +289,7 @@
 <script>
 // Bump this with every meaningful change so testers can confirm which version is loaded
 // (shown in the header, and stamped into JSON backups).
-const APP_VERSION = 'v1.5.0';
+const APP_VERSION = 'v1.6.0';
 document.getElementById('versionTag').textContent = APP_VERSION;
 
 const STORAGE_KEY = 'hwInventory_v1';
@@ -287,6 +303,8 @@ let editingId = null;
 let wishPendingPhoto = null;
 let wishEditingId = null;
 let movingWishId = null; // set when the Add Car form was prefilled from a wishlist item, so a successful save can remove it from the wishlist
+let upcLookup = {}; // loaded from upc_lookup.json — UPC string → array of product hints
+let upcPickerMatches = null;
 
 // Stored photo dimensions -- kept small since every saved photo lives in localStorage on
 // the phone. 520px / 0.68 quality keeps images clearly recognizable for a small collection
@@ -297,6 +315,7 @@ const PHOTO_QUALITY = 0.68;
 function switchTab(tab){
   if(tab !== 'add'){
     stopBarcodeScanner(); // release the camera if we're navigating away mid-scan
+    closeUpcPicker();
     // Don't clear the in-progress draft (photo/fields) just for tapping another tab -- but DO
     // drop the wishlist-bridge link, so a later, unrelated save can never delete the wrong
     // wishlist item. If the user comes back and re-triggers "Found it!" it gets reset properly.
@@ -482,9 +501,8 @@ function onBarcodeDetected(result){
   }
 
   document.getElementById('upcField').value = code;
-  statusEl.textContent = '✓ Detected: ' + code;
-  statusEl.className = 'status-line status-ok';
   stopBarcodeScanner();
+  handleUpcLookup(code);
 }
 
 function stopBarcodeScanner(){
@@ -497,6 +515,110 @@ function stopBarcodeScanner(){
   document.getElementById('scannerBg').classList.remove('active');
 }
 
+// UPC reference lookup (v1.6). The barcode itself is only a number — casting/line/series come
+// from upc_lookup.json. Shared mainline assortment codes may return multiple matches; rarity is
+// never inferred (TH/STH stay a manual visual tag).
+async function loadUpcLookup(){
+  try{
+    const resp = await fetch('upc_lookup.json', { cache: 'no-cache' });
+    if(!resp.ok) return;
+    const data = await resp.json();
+    upcLookup = {};
+    Object.keys(data).forEach(key=>{
+      if(key.startsWith('_')) return;
+      if(Array.isArray(data[key])) upcLookup[key] = data[key];
+    });
+  }catch(e){
+    console.warn('UPC lookup table not loaded — autofill disabled.', e);
+  }
+}
+
+function normalizeUpcVariants(code){
+  const digits = (code || '').replace(/\D/g, '');
+  if(!digits) return [];
+  const variants = new Set([digits]);
+  if(digits.length === 13 && digits.startsWith('0')) variants.add(digits.slice(1));
+  if(digits.length === 12) variants.add('0' + digits);
+  return [...variants];
+}
+
+function lookupUpc(code){
+  const results = [];
+  const seen = new Set();
+  normalizeUpcVariants(code).forEach(variant=>{
+    const entries = upcLookup[variant];
+    if(!Array.isArray(entries)) return;
+    entries.forEach(entry=>{
+      const key = [entry.casting_name, entry.manufacturer_line, entry.series_name, entry.collector_number].join('|');
+      if(seen.has(key)) return;
+      seen.add(key);
+      results.push(entry);
+    });
+  });
+  return results;
+}
+
+function applyLookupEntry(entry){
+  if(!entry) return;
+  if(entry.casting_name) document.getElementById('castingField').value = entry.casting_name;
+  if(entry.manufacturer_line) document.getElementById('mfrField').value = entry.manufacturer_line;
+  if(entry.series_name) document.getElementById('seriesField').value = entry.series_name;
+}
+
+function showUpcPicker(matches){
+  upcPickerMatches = matches;
+  const list = document.getElementById('upcPickerList');
+  list.innerHTML = matches.map((m, i)=>`
+    <button type="button" class="picker-item" onclick="selectUpcMatch(${i})">
+      <div class="picker-name">${escapeHtml(m.casting_name || 'Unknown casting')}</div>
+      <div class="picker-meta">${escapeHtml([m.manufacturer_line, m.series_name, m.collector_number ? '#' + m.collector_number : ''].filter(Boolean).join(' · '))}</div>
+    </button>
+  `).join('');
+  document.getElementById('upcPickerBg').classList.add('active');
+}
+
+function selectUpcMatch(idx){
+  const entry = upcPickerMatches && upcPickerMatches[idx];
+  if(entry) applyLookupEntry(entry);
+  const statusEl = document.getElementById('barcodeStatus');
+  statusEl.textContent = entry ? '✓ Autofilled: ' + entry.casting_name : '';
+  statusEl.className = 'status-line status-ok';
+  closeUpcPicker();
+}
+
+function closeUpcPicker(){
+  document.getElementById('upcPickerBg').classList.remove('active');
+  upcPickerMatches = null;
+}
+
+function handleUpcLookup(code){
+  const statusEl = document.getElementById('barcodeStatus');
+  const trimmed = (code || '').trim();
+  if(trimmed.length < 8){
+    return;
+  }
+  const matches = lookupUpc(trimmed);
+  if(matches.length === 0){
+    statusEl.textContent = '✓ UPC: ' + trimmed + ' — no lookup match (enter details manually)';
+    statusEl.className = 'status-line';
+    return;
+  }
+  if(matches.length === 1){
+    applyLookupEntry(matches[0]);
+    statusEl.textContent = '✓ UPC: ' + trimmed + ' — autofilled ' + matches[0].casting_name;
+    statusEl.className = 'status-line status-ok';
+    return;
+  }
+  statusEl.textContent = '✓ UPC: ' + trimmed + ' — pick your casting below';
+  statusEl.className = 'status-line status-ok';
+  showUpcPicker(matches);
+}
+
+function onUpcFieldBlur(){
+  const code = document.getElementById('upcField').value.trim();
+  if(code.length >= 8) handleUpcLookup(code);
+}
+
 function selectRarity(val){
   currentRarity = val;
   document.querySelectorAll('.seg-opt').forEach(el=>{
@@ -506,6 +628,7 @@ function selectRarity(val){
 
 function resetForm(){
   stopBarcodeScanner();
+  closeUpcPicker();
   pendingPhoto = null; currentRarity = null; editingId = null; movingWishId = null;
   document.getElementById('carPhotoPreview').style.display='none';
   document.getElementById('carPhotoInput').value='';
@@ -531,6 +654,14 @@ function saveItem(){
     statusEl.textContent = 'Please select a rarity tag (Mainline / TH / Super TH).';
     statusEl.className = 'status-line status-bad';
     return;
+  }
+  const upc = document.getElementById('upcField').value.trim();
+  if(upc){
+    const dupe = items.find(i => i.upc === upc && i.id !== editingId);
+    if(dupe){
+      const label = dupe.casting_name || 'another car';
+      if(!confirm('You already have "' + label + '" with this UPC. Add anyway?')) return;
+    }
   }
   const item = {
     id: editingId || (Date.now() + '-' + Math.random().toString(36).slice(2,7)),
@@ -580,6 +711,10 @@ function escapeHtml(s){
   return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function escapeJsString(s){
+  return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
 function renderInventory(){
   populateMfrFilter();
   const search = document.getElementById('searchField').value.trim().toLowerCase();
@@ -600,7 +735,7 @@ function renderInventory(){
     return;
   }
   listEl.innerHTML = filtered.map(i=>`
-    <div class="item-card" onclick="openModal('${i.id}')">
+    <div class="item-card" onclick="openModal('${escapeJsString(i.id)}')">
       ${i.photo ? `<img src="${i.photo}">` : `<div class="noimg">🚗</div>`}
       <div class="item-info">
         <div class="name">${escapeHtml(i.casting_name || 'Unnamed casting')}</div>
@@ -626,8 +761,8 @@ function openModal(id){
     ${item.notes ? `<div style="font-size:14px;margin-top:8px;white-space:pre-wrap;">${escapeHtml(item.notes)}</div>` : ''}
     <div style="font-size:11px;color:var(--muted);margin-top:12px;">Added ${new Date(item.date_added).toLocaleDateString()}</div>
     <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="editItem('${item.id}')">Edit</button>
-      <button class="btn btn-ghost" style="color:var(--bad);border-color:var(--bad);" onclick="deleteItem('${item.id}')">Delete</button>
+      <button class="btn btn-secondary" onclick="editItem('${escapeJsString(item.id)}')">Edit</button>
+      <button class="btn btn-ghost" style="color:var(--bad);border-color:var(--bad);" onclick="deleteItem('${escapeJsString(item.id)}')">Delete</button>
     </div>
   `;
   document.getElementById('modalBg').classList.add('active');
@@ -712,7 +847,7 @@ function renderWishlist(){
     return;
   }
   listEl.innerHTML = wishItems.map(i=>`
-    <div class="item-card" onclick="openWishModal('${i.id}')">
+    <div class="item-card" onclick="openWishModal('${escapeJsString(i.id)}')">
       ${i.photo ? `<img src="${i.photo}">` : `<div class="noimg">🔍</div>`}
       <div class="item-info">
         <div class="name">${escapeHtml(i.car_name)}</div>
@@ -735,10 +870,10 @@ function openWishModal(id){
     ${item.notes ? `<div style="font-size:14px;margin-top:8px;white-space:pre-wrap;">${escapeHtml(item.notes)}</div>` : ''}
     <div style="font-size:11px;color:var(--muted);margin-top:12px;">Added ${new Date(item.date_added).toLocaleDateString()}</div>
     <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="editWishItem('${item.id}')">Edit</button>
-      <button class="btn btn-ghost" style="color:var(--bad);border-color:var(--bad);" onclick="deleteWishItem('${item.id}')">Delete</button>
+      <button class="btn btn-secondary" onclick="editWishItem('${escapeJsString(item.id)}')">Edit</button>
+      <button class="btn btn-ghost" style="color:var(--bad);border-color:var(--bad);" onclick="deleteWishItem('${escapeJsString(item.id)}')">Delete</button>
     </div>
-    <button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="moveWishToInventory('${item.id}')">Found it! Add to Inventory →</button>
+    <button class="btn btn-primary" style="width:100%;margin-top:10px;" onclick="moveWishToInventory('${escapeJsString(item.id)}')">Found it! Add to Inventory →</button>
   `;
   document.getElementById('modalBg').classList.add('active');
 }
@@ -841,8 +976,10 @@ function importData(event){
   event.target.value = '';
 }
 
-renderInventory();
-renderWishlist();
+loadUpcLookup().then(()=>{
+  renderInventory();
+  renderWishlist();
+});
 </script>
 </body>
 </html>

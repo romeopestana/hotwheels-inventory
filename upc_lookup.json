@@ -1,0 +1,43 @@
+{
+  "_meta": {
+    "version": 1,
+    "description": "UPC → Hot Wheels product hints. One UPC may map to multiple castings (shared mainline assortment codes). Add real codes from your collection over time.",
+    "updated": "2026-07-30"
+  },
+  "887961234567": [
+    {
+      "casting_name": "'69 Shelby GT-500",
+      "manufacturer_line": "Mainline",
+      "series_name": "HW Speed Graphics",
+      "collector_number": "127/250"
+    },
+    {
+      "casting_name": "Bone Shaker",
+      "manufacturer_line": "Mainline",
+      "series_name": "HW Dream Garage",
+      "collector_number": "128/250"
+    },
+    {
+      "casting_name": "Twin Mill",
+      "manufacturer_line": "Mainline",
+      "series_name": "HW Screen Time",
+      "collector_number": "129/250"
+    }
+  ],
+  "887961876543": [
+    {
+      "casting_name": "Porsche 911 GT3 RS",
+      "manufacturer_line": "Car Culture",
+      "series_name": "Circuit Legends",
+      "collector_number": null
+    }
+  ],
+  "887961111222": [
+    {
+      "casting_name": "'71 Plymouth GTX",
+      "manufacturer_line": "Premium",
+      "series_name": "Boulevard",
+      "collector_number": null
+    }
+  ]
+}
