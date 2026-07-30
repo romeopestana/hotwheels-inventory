@@ -289,7 +289,7 @@
 <script>
 // Bump this with every meaningful change so testers can confirm which version is loaded
 // (shown in the header, and stamped into JSON backups).
-const APP_VERSION = 'v1.6.0';
+const APP_VERSION = 'v1.6.1';
 document.getElementById('versionTag').textContent = APP_VERSION;
 
 const STORAGE_KEY = 'hwInventory_v1';
@@ -307,10 +307,12 @@ let upcLookup = {}; // loaded from upc_lookup.json — UPC string → array of p
 let upcPickerMatches = null;
 
 // Stored photo dimensions -- kept small since every saved photo lives in localStorage on
-// the phone. 520px / 0.68 quality keeps images clearly recognizable for a small collection
-// card/thumbnail while using a fraction of the space of a full camera photo.
-const PHOTO_MAX_DIM = 520;
-const PHOTO_QUALITY = 0.68;
+// the phone. Kept deliberately modest: the Wishlist tab already holds list thumbnails in
+// memory, so decoding a new camera shot on top of that is tighter than on the Add tab.
+const PHOTO_MAX_DIM = 400;
+const PHOTO_QUALITY = 0.62;
+// Image() fallback fully decodes the camera file; refuse large files rather than OOM-crash.
+const FALLBACK_MAX_BYTES = 2 * 1024 * 1024;
 
 function switchTab(tab){
   if(tab !== 'add'){
@@ -329,53 +331,111 @@ function switchTab(tab){
   if(tab==='wish') renderWishlist();
 }
 
+// Drop decoded list thumbnails (and the other tab's preview) before decoding a new camera
+// shot. The Wishlist screen is especially tight on memory because the form sits above a
+// rendered list of photos — Add does not — which is why wishlist captures crashed even
+// though both paths already shared resizeImage().
+function releaseDecodedPhotos(){
+  ['itemList', 'wishList'].forEach(id=>{
+    const root = document.getElementById(id);
+    if(!root) return;
+    root.querySelectorAll('img').forEach(img=>{
+      img.removeAttribute('src');
+      img.src = '';
+    });
+    root.innerHTML = '';
+  });
+}
+
+function targetSize(w, h, maxDim){
+  if(w > h && w > maxDim) return { w: maxDim, h: Math.round(h * maxDim / w) };
+  if(h >= w && h > maxDim) return { w: Math.round(w * maxDim / h), h: maxDim };
+  return { w, h };
+}
+
+function bitmapToJpeg(bitmap, maxDim, quality){
+  const size = targetSize(bitmap.width, bitmap.height, maxDim);
+  const canvas = document.createElement('canvas');
+  canvas.width = size.w;
+  canvas.height = size.h;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, size.w, size.h);
+  if(bitmap.close) bitmap.close();
+  const dataUrl = canvas.toDataURL('image/jpeg', quality);
+  canvas.width = 0;
+  canvas.height = 0;
+  return dataUrl;
+}
+
 // Modern phone cameras shoot very large photos (12-100+ MP). Decoding the full-resolution
-// image into memory before shrinking it (e.g. via FileReader -> base64 -> <img>) can exceed a
-// mobile browser tab's memory budget and crash the page. To avoid that we prefer
-// createImageBitmap() with resize options, which lets the browser downscale *during* decode
-// instead of ever materializing the full-size bitmap. We fall back to an object-URL + <img>
-// approach (still cheaper than base64) only if createImageBitmap isn't available.
+// image into memory before shrinking it can exceed a mobile browser tab's memory budget.
+// Prefer createImageBitmap() with resize options so the browser can downscale during decode.
 async function resizeImage(file, maxDim, quality){
-  const MAX_INPUT_BYTES = 30 * 1024 * 1024; // sanity cap, just in case
+  const MAX_INPUT_BYTES = 30 * 1024 * 1024;
   if(file.size > MAX_INPUT_BYTES){
     throw new Error('That photo is very large (' + Math.round(file.size/1024/1024) + 'MB). Try again, or lower your camera resolution in phone settings.');
   }
 
   if(typeof createImageBitmap === 'function'){
-    try{
-      const bitmap = await createImageBitmap(file, { resizeWidth: maxDim, resizeQuality: 'medium' });
-      // Some browsers accept resize options without error but ignore them and return the
-      // full-resolution bitmap anyway. Never trust bitmap.width/height blindly -- always
-      // compute the target size ourselves and draw scaled down onto a small canvas, so the
-      // canvas (and the resulting encoded image) never balloon to full camera resolution.
-      let w = bitmap.width, h = bitmap.height;
-      if(w>h && w>maxDim){ h=Math.round(h*maxDim/w); w=maxDim; }
-      else if(h>=w && h>maxDim){ w=Math.round(w*maxDim/h); h=maxDim; }
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
-      if(bitmap.close) bitmap.close();
-      return canvas.toDataURL('image/jpeg', quality);
-    }catch(e){
-      // fall through to the fallback path below (some browsers reject resize options entirely)
+    // Try longest-edge caps from both orientations. Some engines only honour one axis;
+    // others ignore resize options entirely (handled below).
+    const attempts = [
+      { resizeWidth: maxDim, resizeHeight: maxDim, resizeQuality: 'low' },
+      { resizeWidth: maxDim, resizeQuality: 'low' },
+      { resizeHeight: maxDim, resizeQuality: 'low' }
+    ];
+    for(const opts of attempts){
+      try{
+        let bitmap = await createImageBitmap(file, opts);
+        // If options were ignored we still got a huge bitmap — try a second downscale from
+        // the first bitmap before drawing to canvas.
+        if(bitmap.width > maxDim * 2 || bitmap.height > maxDim * 2){
+          const size = targetSize(bitmap.width, bitmap.height, maxDim);
+          try{
+            const scaled = await createImageBitmap(bitmap, {
+              resizeWidth: size.w,
+              resizeHeight: size.h,
+              resizeQuality: 'low'
+            });
+            if(bitmap.close) bitmap.close();
+            bitmap = scaled;
+          }catch(e){
+            // Keep the large bitmap and let bitmapToJpeg draw it scaled (may still be tight).
+          }
+        }
+        return bitmapToJpeg(bitmap, maxDim, quality);
+      }catch(e){
+        // try next option set
+      }
     }
+  }
+
+  // Image() fallback fully decodes the file — refuse large camera JPEGs rather than crash.
+  if(file.size > FALLBACK_MAX_BYTES){
+    throw new Error('Could not shrink that photo safely on this phone. Try choosing a smaller/existing photo, or lower camera resolution in phone settings.');
   }
 
   return new Promise((resolve,reject)=>{
     const objUrl = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      let w=img.naturalWidth, h=img.naturalHeight;
-      if(w>h && w>maxDim){ h=Math.round(h*maxDim/w); w=maxDim; }
-      else if(h>=w && h>maxDim){ w=Math.round(w*maxDim/h); h=maxDim; }
-      const canvas = document.createElement('canvas');
-      canvas.width=w; canvas.height=h;
-      canvas.getContext('2d').drawImage(img,0,0,w,h);
-      URL.revokeObjectURL(objUrl);
-      resolve(canvas.toDataURL('image/jpeg', quality));
+      try{
+        const size = targetSize(img.naturalWidth, img.naturalHeight, maxDim);
+        const canvas = document.createElement('canvas');
+        canvas.width = size.w;
+        canvas.height = size.h;
+        canvas.getContext('2d').drawImage(img, 0, 0, size.w, size.h);
+        URL.revokeObjectURL(objUrl);
+        img.src = '';
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        canvas.width = 0;
+        canvas.height = 0;
+        resolve(dataUrl);
+      }catch(err){
+        URL.revokeObjectURL(objUrl);
+        reject(new Error('Could not process that photo. Please try again.'));
+      }
     };
-    img.onerror = (e) => { URL.revokeObjectURL(objUrl); reject(new Error('Could not read that photo. Please try again.')); };
+    img.onerror = () => { URL.revokeObjectURL(objUrl); reject(new Error('Could not read that photo. Please try again.')); };
     img.src = objUrl;
   });
 }
@@ -386,6 +446,7 @@ function handlePhoto(event){
   const statusEl = document.getElementById('saveStatus');
   statusEl.textContent = 'Processing photo...';
   statusEl.className = 'status-line';
+  releaseDecodedPhotos();
   resizeImage(file, PHOTO_MAX_DIM, PHOTO_QUALITY).then(dataUrl=>{
     pendingPhoto = dataUrl;
     const img = document.getElementById('carPhotoPreview');
@@ -405,16 +466,21 @@ function handleWishPhoto(event){
   const statusEl = document.getElementById('wishSaveStatus');
   statusEl.textContent = 'Processing photo...';
   statusEl.className = 'status-line';
+  // Critical on Wishlist: unload the list thumbnails before decoding the new camera file.
+  releaseDecodedPhotos();
+  document.getElementById('wishList').innerHTML = '<div class="empty">Processing photo…</div>';
   resizeImage(file, PHOTO_MAX_DIM, PHOTO_QUALITY).then(dataUrl=>{
     wishPendingPhoto = dataUrl;
     const img = document.getElementById('wishPhotoPreview');
     img.src = dataUrl;
     img.style.display='block';
     statusEl.textContent = '';
+    renderWishlist();
   }).catch(err=>{
     statusEl.textContent = err.message || 'Could not process that photo. Please try again.';
     statusEl.className = 'status-line status-bad';
     event.target.value = '';
+    renderWishlist();
   });
 }
 
@@ -736,7 +802,7 @@ function renderInventory(){
   }
   listEl.innerHTML = filtered.map(i=>`
     <div class="item-card" onclick="openModal('${escapeJsString(i.id)}')">
-      ${i.photo ? `<img src="${i.photo}">` : `<div class="noimg">🚗</div>`}
+      ${i.photo ? `<img src="${i.photo}" loading="lazy" decoding="async">` : `<div class="noimg">🚗</div>`}
       <div class="item-info">
         <div class="name">${escapeHtml(i.casting_name || 'Unnamed casting')}</div>
         <div class="meta">${escapeHtml(i.manufacturer_line || '—')}${i.series_name ? ' · ' + escapeHtml(i.series_name) : ''}</div>
@@ -848,7 +914,7 @@ function renderWishlist(){
   }
   listEl.innerHTML = wishItems.map(i=>`
     <div class="item-card" onclick="openWishModal('${escapeJsString(i.id)}')">
-      ${i.photo ? `<img src="${i.photo}">` : `<div class="noimg">🔍</div>`}
+      ${i.photo ? `<img src="${i.photo}" loading="lazy" decoding="async">` : `<div class="noimg">🔍</div>`}
       <div class="item-info">
         <div class="name">${escapeHtml(i.car_name)}</div>
         <div class="meta">${escapeHtml(i.series_name || '—')}${i.colour ? ' · ' + escapeHtml(i.colour) : ''}</div>
